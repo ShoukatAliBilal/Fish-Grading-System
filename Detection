@@ -1,0 +1,107 @@
+import torch
+from PIL import Image
+import torchvision.transforms as T
+import matplotlib.pyplot as plt
+import random
+from torchvision.models.detection import maskrcnn_resnet50_fpn
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
+
+# Define transformation function
+def get_transform(train):
+    transform_list = [T.ToTensor()]
+    return T.Compose(transform_list)
+
+# Define device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def get_instance_segmentation_model(num_classes):
+    # Load a model pre-trained on COCO
+    model = maskrcnn_resnet50_fpn(pretrained=False)
+
+    # Replace the classifier with a new one for our dataset
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+    # Replace the mask predictor with a new one
+    in_features_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
+    hidden_layer = 256
+    model.roi_heads.mask_predictor = MaskRCNNPredictor(in_features_mask, hidden_layer, num_classes)
+
+    return model
+
+# Load the model (ensure model is properly loaded or replace with the correct loading code)
+# Assuming the model is loaded and trained
+model = get_instance_segmentation_model(num_classes=2)  # Adjust num_classes as per your setup
+model.load_state_dict(torch.load('/content/drive/MyDrive/programs/model/fish_detection_model7.pth'))  # Replace with your model path
+model.to(device)
+model.eval()
+
+# Load and preprocess a test image
+test_image_path = '/content/drive/MyDrive/programs/test/Gold Fish/Goldfish 041.jpg'  # Replace with your image path
+image = Image.open(test_image_path).convert("RGB")
+transform = get_transform(train=False)
+image_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
+
+# Run inference
+with torch.no_grad():
+    outputs = model(image_tensor)
+
+# Extract predictions for the first image in the batch
+predictions = outputs[0]
+
+# Define the pixel-to-cm conversion factor (e.g., 0.1 cm per pixel# Adjust this based on your calibration
+
+# Initialize list to store fish dimensions
+fish_sizes_cm = []
+# Define the function to load the model
+# Function to visualize predictions with colored boxes and calculate sizes
+def visualize_predictions(rl_size,image_tensor, predictions, threshold=0.5):
+    plt.figure(figsize=(10, 10))
+
+    # Convert tensor to numpy for visualization
+    image_np = image_tensor[0].permute(1, 2, 0).cpu().numpy()
+    plt.imshow(image_np)
+    ax = plt.gca()
+
+    boxes = predictions['boxes']
+    scores = predictions['scores']
+
+    for i, (box, score) in enumerate(zip(boxes, scores)):
+        if score >= threshold:
+            xmin, ymin, xmax, ymax = box.int().cpu().numpy()
+
+            # Calculate width and height in pixels
+            width_px = xmax - xmin
+            height_px = ymax - ymin
+            if width_px>height_px:
+               pixel_to_cm = round(rl_size/width_px,3)
+            else:
+               pixel_to_cm = round(rl_size/height_px,3)
+            # Convert to centimeters
+            width_cm = width_px * pixel_to_cm
+            height_cm = height_px * pixel_to_cm
+
+            # Store the fish dimensions in centimeters
+            fish_sizes_cm.append((width_cm, height_cm))
+
+            # Assign a random color for each box
+            color = (random.random(), random.random(), random.random())  # RGB color
+
+            # Draw the rectangle with the calculated color
+            rect = plt.Rectangle((xmin, ymin), width_px, height_px, fill=False, color=color, linewidth=2)
+            ax.add_patch(rect)
+
+            # Display the score and box dimensions in centimeters
+            plt.text(xmin, ymin, f'Score: {score:.2f}\nW: {width_cm:.2f} cm, H: {height_cm:.2f} cm', color=color, fontsize=12, weight='bold')
+
+    plt.axis('off')
+    plt.show()
+rl_size=int(input("Enter the average Size of the fish: "))
+# Visualize predictions
+visualize_predictions(rl_size,image_tensor, predictions, threshold=0.5)
+
+# Print stored fish dimensions in centimeters
+print("Fish sizes in centimeters:")
+for idx, (width, height) in enumerate(fish_sizes_cm, 1):
+    print(f"Fish {idx}: Width = {width:.2f} cm, Height = {height:.2f} cm")
